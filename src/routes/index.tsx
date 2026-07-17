@@ -3,7 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { useStore, countAbsences, chargerClassesDepuisServeur } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { createClasse } from "@/services/api/classes";
+import { createClasse, updateClasseServeur } from "@/services/api/classes";
 import {
   Dialog,
   DialogContent,
@@ -13,7 +13,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useMemo, useState } from "react";
-import { Plus, ChevronRight, AlertTriangle, Settings2, FileSpreadsheet, GraduationCap, ClipboardList, QrCode, ScanLine, Trash2, Pencil, CheckCheck, BookOpen } from "lucide-react";
+import { Plus, ChevronRight, AlertTriangle, Settings2, FileSpreadsheet, GraduationCap, ClipboardList, ScanLine, Trash2, Pencil } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -124,42 +124,6 @@ function HomePage() {
         <div className="flex-1">
           <p className="font-bold text-lg">Scanner un élève</p>
           <p className="text-xs text-muted-foreground">Ouvre directement sa fiche</p>
-        </div>
-        <ChevronRight />
-      </Link>
-
-      <Link
-        to="/qr-codes"
-        className="mb-3 rounded-2xl bg-secondary text-secondary-foreground p-4 tap-lg flex items-center gap-3 shadow-sm active:scale-[0.98] transition"
-      >
-        <QrCode className="size-9" />
-        <div className="flex-1">
-          <p className="font-bold text-lg">QR codes de tous les élèves</p>
-          <p className="text-xs opacity-80">Générer et imprimer</p>
-        </div>
-        <ChevronRight />
-      </Link>
-
-      <Link
-        to="/verif-travail"
-        className="mb-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-emerald-950 p-4 tap-lg flex items-center gap-3 active:scale-[0.98] transition"
-      >
-        <CheckCheck className="size-9 text-emerald-600" />
-        <div className="flex-1">
-          <p className="font-bold text-lg">Vérification du travail</p>
-          <p className="text-xs opacity-80">Sur le plan · d'après le dernier appel</p>
-        </div>
-        <ChevronRight />
-      </Link>
-
-      <Link
-        to="/verif-classeur"
-        className="mb-5 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 p-4 tap-lg flex items-center gap-3 active:scale-[0.98] transition"
-      >
-        <BookOpen className="size-9 text-amber-600" />
-        <div className="flex-1">
-          <p className="font-bold text-lg">A son classeur</p>
-          <p className="text-xs opacity-80">Sur le plan · d'après le dernier appel</p>
         </div>
         <ChevronRight />
       </Link>
@@ -402,12 +366,13 @@ function HomePage() {
               </Select>
             </div>
           </div>
-          <DialogFooter>
+            <DialogFooter>
             <Button
               className="w-full tap-lg"
-              onClick={() => {
+              onClick={async () => {
                 if (!editingId) return;
                 if (!editNom.trim()) return;
+                // Mise à jour locale immédiate
                 updateClasse(editingId, {
                   nom: editNom.trim(),
                   groupe1Nom: editG1.trim() || undefined,
@@ -415,6 +380,20 @@ function HomePage() {
                   alias1: editAlias1.trim() || undefined,
                   alias2: editAlias2.trim() || undefined,
                 });
+                try {
+                  // Persiste côté serveur
+                  await updateClasseServeur(editingId, {
+                    nom: editNom.trim(),
+                    groupe1_nom: editG1.trim() || null,
+                    groupe2_nom: editG2.trim() || null,
+                    alias1: editAlias1.trim() || null,
+                    alias2: editAlias2.trim() || null,
+                  });
+                  // Recharge les classes pour s'assurer de la synchronisation
+                  await chargerClassesDepuisServeur();
+                } catch (err) {
+                  console.error("Impossible de mettre à jour la classe sur le serveur :", err);
+                }
                 setEditingId(null);
               }}
             >

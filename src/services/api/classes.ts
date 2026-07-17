@@ -11,18 +11,41 @@ export type ClasseApi = {
   created_at: string;
 };
 
+export type UpdateClasseData = {
+  nom?: string;
+  alias1?: string | null;
+  alias2?: string | null;
+  groupe1_nom?: string | null;
+  groupe2_nom?: string | null;
+};
+
 export function getClasses() {
   return api<ClasseApi[]>("/classes");
 }
 
-export function createClasse(nom: string, source: "manual" | "edt" = "manual") {
+export function createClasse(data: {
+  nom: string;
+  alias1?: string;
+  alias2?: string;
+}) {
   return api<ClasseApi>("/classes", {
     method: "POST",
-    body: JSON.stringify({ nom, source }),
+    body: JSON.stringify(data),
   });
 }
+
+export function updateClasseServeur(
+  id: string,
+  data: UpdateClasseData,
+) {
+  return api<ClasseApi>(`/classes/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
 export function deleteClasseServeur(id: string) {
-  return api<{ success: boolean; id: string }>(`/classes/${id}`, {
+  return api<{ success: boolean }>(`/classes/${id}`, {
     method: "DELETE",
   });
 }

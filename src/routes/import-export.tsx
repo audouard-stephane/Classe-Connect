@@ -25,7 +25,8 @@ function ImportExportPage() {
       const r = await fn(file);
       toast.success(`Import ${label} : ${JSON.stringify(r)}`);
     } catch (e) {
-      toast.error(`Erreur import ${label}`);
+      const message = e instanceof Error ? e.message : `${e}`;
+      toast.error(`Erreur import ${label} : ${message}`);
       console.error(e);
     }
   };

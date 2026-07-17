@@ -3,6 +3,7 @@ import { z } from "zod";
 import { useEffect, useMemo, useRef, useState, type PointerEvent as RPE } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -21,8 +22,10 @@ import {
 
 
 import { useStore, type PlanScope, type SeatTable, type TableOrientation, type TableRotation, TABLE_H_W, TABLE_H_H, TABLE_V_W, TABLE_V_H } from "@/lib/store";
+import { getPlan } from "@/services/api/plans";
+import { getPlanTemplates, createPlanTemplate, deletePlanTemplate as deletePlanTemplateServer, getDefaultPlan, upsertDefaultPlan } from "@/services/api/planTemplates";
 import { toast } from "sonner";
-import { Trash2, Grid3x3, Users, ScanLine, RotateCw, X, Magnet, Plus, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Move } from "lucide-react";
+import { Trash2, Grid3x3, Users, ScanLine, RotateCw, X, Magnet, Plus, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Move, Save } from "lucide-react";
 
 import { detectSexe, displayName } from "@/lib/plan-helpers";
 
@@ -37,8 +40,69 @@ export const Route = createFileRoute("/plan/$classeId")({
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
-// Disposition par défaut : plan vide, l'utilisateur place ses tables lui-même.
-const DEFAULT_LAYOUT: Array<Omit<SeatTable, "id">> = [];
+export type PlanTemplate = {
+  id: string;
+  name: string;
+  salle?: string;
+  scope: PlanScope;
+  tables: Array<Omit<SeatTable, "id">>;
+  createdAt: number;
+};
+
+const asTableStructure = (value: unknown): Array<Omit<SeatTable, "id">> => {
+  if (!Array.isArray(value)) return [];
+  return value as Array<Omit<SeatTable, "id">>;
+};
+
+const mapApiTemplate = (template: {
+  id: string;
+  name: string;
+  salle: string | null;
+  scope: PlanScope;
+  tables: unknown[];
+  created_at: string;
+}) => ({
+  id: template.id,
+  name: template.name,
+  salle: template.salle ?? undefined,
+  scope: template.scope,
+  tables: asTableStructure(template.tables),
+  createdAt: new Date(template.created_at).getTime(),
+});
+
+const mapDefaultPlan = (plan: {
+  tables: unknown[];
+  rows?: number | string | null;
+  cols?: number | string | null;
+  orientation?: string | null;
+  zoom?: number | string | null;
+  background_image?: string | null;
+}) => ({
+  tables: asTableStructure(plan.tables),
+  rows: typeof plan.rows === "number" ? plan.rows : Number(plan.rows) || 0,
+  cols: typeof plan.cols === "number" ? plan.cols : Number(plan.cols) || 0,
+  orientation: plan.orientation ?? null,
+  zoom: typeof plan.zoom === "number" ? plan.zoom : Number(plan.zoom) || 1,
+  backgroundImage: plan.background_image ?? undefined,
+});
+
+// Disposition par défaut : tables positionnées selon l’image fournie.
+const DEFAULT_LAYOUT: Array<Omit<SeatTable, "id">> = [
+  { x: 13, y: 12, orientation: "h", w: 30, h: 8 },
+  { x: 51, y: 12, orientation: "h", w: 30, h: 8 },
+  { x: 89, y: 12, orientation: "h", w: 30, h: 8 },
+  { x: 13, y: 23, orientation: "h", w: 30, h: 8 },
+  { x: 49, y: 23, orientation: "h", w: 30, h: 8 },
+  { x: 85, y: 23, orientation: "h", w: 30, h: 8 },
+  { x: 13, y: 36, orientation: "h", w: 30, h: 8 },
+  { x: 49, y: 36, orientation: "v", w: 8, h: 30 },
+  { x: 85, y: 36, orientation: "h", w: 30, h: 8 },
+  { x: 14, y: 57, orientation: "h", w: 30, h: 8 },
+  { x: 14, y: 69, orientation: "h", w: 30, h: 8 },
+  { x: 64, y: 57, orientation: "h", w: 30, h: 8 },
+  { x: 64, y: 69, orientation: "h", w: 30, h: 8 },
+  { x: 88, y: 57, orientation: "h", w: 30, h: 8 },
+];
 
 
 
@@ -91,7 +155,47 @@ function PlanEditorPage() {
   const [hydrated, setHydrated] = useState(false);
   const [dimensionDraft, setDimensionDraft] = useState<{ tableId: string; w: string; h: string } | null>(null);
   const [nudgeStep, setNudgeStep] = useState(0.5);
+  const [templates, setTemplates] = useState<PlanTemplate[]>([]);
+  const [templateName, setTemplateName] = useState("");
+  const [templateSalle, setTemplateSalle] = useState("");
+  const [defaultPlanTables, setDefaultPlanTables] = useState<Array<Omit<SeatTable, "id">>>([]);
+  const [defaultPlanLoaded, setDefaultPlanLoaded] = useState(false);
+  const [serverPlanLoaded, setServerPlanLoaded] = useState(false);
   const holdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!hydrated || serverPlanLoaded) return;
+    if (!classeId) return;
+
+    let mounted = true;
+    void (async () => {
+      try {
+        const serverPlan = await getPlan(classeId, scope);
+        if (!mounted || !serverPlan) return;
+
+        upsertPlan(classeId, scope, {
+          tables: Array.isArray(serverPlan.tables)
+            ? serverPlan.tables.map((t) => ({
+                ...t,
+                id: uid(),
+                leftEleveId: undefined,
+                rightEleveId: undefined,
+              }))
+            : [],
+          zoom: typeof serverPlan.zoom === "number" ? serverPlan.zoom : Number(serverPlan.zoom) || 1,
+          backgroundImage: serverPlan.background_image ?? undefined,
+        });
+      } catch (error) {
+        console.error("Erreur chargement du plan serveur", error);
+      } finally {
+        if (mounted) setServerPlanLoaded(true);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [hydrated, classeId, scope, serverPlanLoaded, upsertPlan]);
 
   useEffect(() => {
     const finish = () => {
@@ -159,8 +263,20 @@ function PlanEditorPage() {
   }, [classeId, scope, upsertPlan, snap, plan?.zoom]);
 
   const getDefaultTables = (): SeatTable[] => {
+    if (defaultPlanTables.length > 0) {
+      return defaultPlanTables.map((t) => ({
+        ...t,
+        id: uid(),
+        leftEleveId: undefined,
+        rightEleveId: undefined,
+      }));
+    }
+
     const st = useStore.getState();
-    const ref = st.classes.find((c) => c.nom.trim().toLowerCase() === "4c");
+    const ref = st.classes.find((c) => {
+      const nom = c.nom.trim().toLowerCase();
+      return nom === "4a" || nom === "4c";
+    });
     if (ref) {
       const refPlan = st.seatingPlans.find(
         (p) => p.classeId === ref.id && p.scope === "all",
@@ -178,15 +294,105 @@ function PlanEditorPage() {
   };
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || !defaultPlanLoaded) return;
     if (!plan) {
       upsertPlan(classeId, scope, { tables: getDefaultTables() });
     }
-  }, [hydrated, plan, classeId, scope, upsertPlan]);
+  }, [hydrated, defaultPlanLoaded, plan, classeId, scope, upsertPlan, defaultPlanTables]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    void (async () => {
+      try {
+        const result = await getPlanTemplates();
+        if (!mounted) return;
+        setTemplates(result.map(mapApiTemplate));
+      } catch (error) {
+        console.error("Erreur chargement des modèles de plan", error);
+      }
+    })();
+
+    void (async () => {
+      try {
+        const serverDefault = await getDefaultPlan();
+        if (!mounted) return;
+        if (serverDefault) {
+          setDefaultPlanTables(mapDefaultPlan(serverDefault).tables);
+        }
+      } catch (error) {
+        console.error("Erreur chargement du plan par défaut", error);
+      } finally {
+        if (mounted) setDefaultPlanLoaded(true);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const resetToDefault = () => {
     upsertPlan(classeId, scope, { tables: getDefaultTables() });
     toast.success("Disposition de 4C appliquée");
+  };
+
+  const saveTemplate = async () => {
+    if (!plan) {
+      toast.error("Aucun plan à enregistrer.");
+      return;
+    }
+    const name = templateName.trim() || classe?.nom || `Modèle ${new Date().toLocaleDateString()}`;
+    try {
+      const result = await createPlanTemplate({
+        name,
+        salle: templateSalle.trim() || null,
+        scope,
+        tables: plan.tables.map((t) => ({
+          x: t.x,
+          y: t.y,
+          w: t.w ?? (t.orientation === "h" ? TABLE_H_W : TABLE_V_W),
+          h: t.h ?? (t.orientation === "h" ? TABLE_H_H : TABLE_V_H),
+          orientation: t.orientation ?? "h",
+          rotation: t.rotation,
+        })),
+        rows: 0,
+        cols: 0,
+        orientation: null,
+      });
+
+      const saved = mapApiTemplate(result);
+      setTemplates((current) => [saved, ...current]);
+      setTemplateName("");
+      setTemplateSalle("");
+      toast.success("Modèle enregistré");
+    } catch (error) {
+      console.error("Erreur sauvegarde du modèle de plan", error);
+      toast.error("Impossible d'enregistrer le modèle.");
+    }
+  };
+
+  const loadTemplate = (template: PlanTemplate) => {
+    upsertPlan(classeId, scope, {
+      tables: template.tables.map((t) => ({
+        ...t,
+        id: uid(),
+        leftEleveId: undefined,
+        rightEleveId: undefined,
+      })),
+    });
+    toast.success(`Modèle « ${template.name} » appliqué à cette classe`);
+  };
+
+  const removeTemplate = async (id: string) => {
+    try {
+      await deletePlanTemplateServer(id);
+      setTemplates((current) => current.filter((t) => t.id !== id));
+      toast.success("Modèle supprimé");
+    } catch (error) {
+      console.error("Erreur suppression du modèle de plan", error);
+      toast.error("Impossible de supprimer le modèle.");
+    }
   };
 
 
@@ -808,6 +1014,61 @@ function PlanEditorPage() {
 
       {plan && (
         <div className="mt-4 grid grid-cols-1 gap-2">
+          <div className="rounded-2xl border border-border bg-card p-4 space-y-3">
+            <div className="grid gap-2">
+              <Input
+                placeholder="Nom du modèle de plan"
+                value={templateName}
+                onChange={(e) => setTemplateName(e.target.value)}
+                className="h-12"
+              />
+              <Input
+                placeholder="Salle (ex: B12)"
+                value={templateSalle}
+                onChange={(e) => setTemplateSalle(e.target.value)}
+                className="h-12"
+              />
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={() => {
+                  if (!plan) {
+                    toast.error("Aucun plan à enregistrer.");
+                    return;
+                  }
+                  saveTemplate();
+                }}
+              >
+                <Save className="size-4 mr-2" /> Enregistrer le plan
+              </Button>
+            </div>
+            {templates.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-sm font-semibold">Modèles enregistrés</p>
+                <div className="space-y-2">
+                  {templates.map((template) => (
+                    <div key={template.id} className="rounded-xl border border-border p-3 bg-muted">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">{template.name}</p>
+                          {template.salle ? <p className="text-xs text-muted-foreground">Salle : {template.salle}</p> : null}
+                          <p className="text-xs text-muted-foreground">Scope : {template.scope === "all" ? "Classe entière" : template.scope === "g1" ? "Groupe 1" : "Groupe 2"}</p>
+                        </div>
+                        <div className="flex gap-2 flex-wrap">
+                          <Button size="sm" className="h-9" onClick={() => loadTemplate(template)}>
+                            Charger
+                          </Button>
+                          <Button size="sm" variant="outline" className="h-9" onClick={() => removeTemplate(template.id)}>
+                            Supprimer
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           <Button
             variant="outline"
             className="w-full"
@@ -828,6 +1089,39 @@ function PlanEditorPage() {
             }}
           >
             <RotateCw className="size-4" /> Restaurer disposition par défaut
+          </Button>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={async () => {
+              if (!plan) {
+                toast.error("Aucun plan à enregistrer.");
+                return;
+              }
+              try {
+                await upsertDefaultPlan({
+                  tables: plan.tables.map((t) => ({
+                    x: t.x,
+                    y: t.y,
+                    w: t.w ?? (t.orientation === "h" ? TABLE_H_W : TABLE_V_W),
+                    h: t.h ?? (t.orientation === "h" ? TABLE_H_H : TABLE_V_H),
+                    orientation: t.orientation ?? "h",
+                    rotation: t.rotation,
+                  })),
+                  rows: 0,
+                  cols: 0,
+                  orientation: null,
+                  zoom: plan.zoom ?? 1,
+                  background_image: plan.backgroundImage ?? null,
+                });
+                toast.success("Plan enregistré comme disposition par défaut");
+              } catch (error) {
+                console.error("Erreur sauvegarde du plan par défaut", error);
+                toast.error("Impossible d'enregistrer le plan par défaut.");
+              }
+            }}
+          >
+            <Save className="size-4" /> Enregistrer comme plan par défaut
           </Button>
           <Button
             variant="ghost"
@@ -933,8 +1227,8 @@ function PlanEditorPage() {
             return (
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-2">
-                  {seatCard("Place 1", leftE, "leftEleveId")}
-                  {seatCard("Place 2", rightE, "rightEleveId")}
+                  {seatCard("Première place", leftE, "leftEleveId")}
+                  {seatCard("Deuxième place", rightE, "rightEleveId")}
                 </div>
 
                 <p className="text-[11px] text-muted-foreground">

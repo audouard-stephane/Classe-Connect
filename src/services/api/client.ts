@@ -1,4 +1,8 @@
-const API_URL = "http://192.168.1.94:3001/api";
+const DEFAULT_API_URL = typeof window !== "undefined"
+  ? `${window.location.protocol}//${window.location.hostname}:3001/api`
+  : "/api";
+
+const API_URL = import.meta.env.VITE_API_URL || DEFAULT_API_URL;
 
 export async function api<T>(
   path: string,

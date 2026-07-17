@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 import { getClasses } from "../services/api/classes";
 import { getEleves } from "../services/api/eleves";
+import { upsertPlan as upsertPlanServeur, deletePlan as deletePlanServeur } from "../services/api/plans";
 
 const noopStorage = {
   getItem: () => null,
@@ -384,11 +385,23 @@ export const useStore = create<State>()(
             ? s.seatingPlans.map((p) => (p.id === id ? next : p))
             : [...s.seatingPlans, next],
         }));
+        void upsertPlanServeur({
+          classe_id: classeId,
+          scope,
+          tables: next.tables,
+          zoom: next.zoom ?? 1,
+          background_image: next.backgroundImage ?? null,
+        }).catch((error) => {
+          console.error("Échec de la sauvegarde du plan sur le serveur", error);
+        });
         return next;
       },
       deleteSeatingPlan: (classeId, scope) => {
         const id = `${classeId}:${scope}`;
         set((s) => ({ seatingPlans: s.seatingPlans.filter((p) => p.id !== id) }));
+        void deletePlanServeur(classeId, scope).catch((error) => {
+          console.error("Échec de la suppression du plan sur le serveur", error);
+        });
       },
 
       setAlerte: (n) => set((s) => ({ settings: { ...s.settings, alerteAbsences: n } })),
@@ -475,6 +488,16 @@ export async function chargerElevesDepuisServeur() {
     qrCode: eleve.qr_code,
     groupe: eleve.groupe ?? undefined,
     remarque: eleve.remarque ?? undefined,
+    dateNaissance: eleve.date_naissance ?? undefined,
+    sexe: eleve.sexe ?? undefined,
+    email: eleve.email ?? undefined,
+    entree: eleve.entree ?? undefined,
+    sortie: eleve.sortie ?? undefined,
+    rattachement: eleve.rattachement ?? undefined,
+    tuteur: eleve.tuteur ?? undefined,
+    options: eleve.options ?? undefined,
+    regime: eleve.regime ?? undefined,
+    dispositifs: eleve.dispositifs ?? undefined,
     createdAt: new Date(eleve.created_at).getTime(),
   }));
 
@@ -521,5 +544,10 @@ export async function chargerClassesDepuisServeur() {
 if (typeof window !== "undefined") {
   chargerClassesDepuisServeur().catch((error) => {
     console.error("Impossible de charger les classes du serveur :", error);
+  });
+  // Charge aussi la liste des élèves au démarrage pour que les compteurs
+  // affichés sur la page d'accueil soient corrects.
+  chargerElevesDepuisServeur().catch((error) => {
+    console.error("Impossible de charger les élèves du serveur :", error);
   });
 }

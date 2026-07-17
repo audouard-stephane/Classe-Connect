@@ -1,18 +1,27 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
+
 import { AppShell } from "@/components/AppShell";
-import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { deleteClasseServeur } from "@/services/api/classes";
+
+import { useStore } from "@/lib/store";
+import { countAbsences } from "@/lib/store";
+
+import { useElevesServeur } from "@/hooks/useElevesServeur";
+import { useClassesServeur } from "@/hooks/useClassesServeur";
+
 import {
-  chargerClassesDepuisServeur,
-  chargerElevesDepuisServeur,
-} from "@/lib/store";
+  deleteClasseServeur,
+  updateClasseServeur,
+} from "@/services/api/classes";
+
 import {
   createEleve,
+  updateEleveServeur,
   deleteEleveServeur,
 } from "@/services/api/eleves";
+
 import {
   Dialog,
   DialogContent,
@@ -21,6 +30,7 @@ import {
   DialogFooter,
   DialogTrigger,
 } from "@/components/ui/dialog";
+
 import {
   Plus,
   ScanLine,
@@ -37,8 +47,8 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { downloadCSV } from "@/lib/csv";
-import { countAbsences } from "@/lib/store";
 import QRCode from "qrcode";
+
 import {
   gardeDocumentHTML,
   gardePageHTML,
@@ -64,26 +74,25 @@ function schoolYear(): string {
 function ClassePage() {
   const { classeId } = Route.useParams();
   const { groupe: groupeSearch } = Route.useSearch();
-  const allClasses = useStore((s) => s.classes);
-  const allEleves = useStore((s) => s.eleves);
+  const {
+    classes: allClasses,
+    recharger: rechargerClasses,
+  } = useClassesServeur();
+  const {
+  eleves: allEleves,
+  recharger: rechargerEleves,
+  chargement: chargementEleves,
+} = useElevesServeur(classeId);
   const allAeshs = useStore((s) => s.aeshs);
   const classe = useMemo(
     () => allClasses.find((c) => c.id === classeId),
     [allClasses, classeId],
   );
-  const eleves = useMemo(
-    () => allEleves.filter((e) => e.classeId === classeId),
-    [allEleves, classeId],
-  );
+  const eleves = allEleves;
   const aeshsAssocies = useMemo(
     () => allAeshs.filter((a) => a.classeIds.includes(classeId)),
     [allAeshs, classeId],
   );
-  const addEleve = useStore((s) => s.addEleve);
-  const updateEleve = useStore((s) => s.updateEleve);
-  const deleteEleve = useStore((s) => s.deleteEleve);
-  const deleteClasse = useStore((s) => s.deleteClasse);
-  const updateClasse = useStore((s) => s.updateClasse);
   const navigate = useNavigate();
 
   const [open, setOpen] = useState(false);
@@ -105,9 +114,7 @@ function ClassePage() {
   useEffect(() => {
     setGroupeFilter(groupeSearch ?? "all");
   }, [groupeSearch]);
-  useEffect(() => {
-    chargerElevesDepuisServeur().catch(console.error);
-  }, []);
+  
   const sortedEleves = useMemo(
     () =>
       eleves
@@ -198,8 +205,8 @@ function ClassePage() {
             setEditNom(classe.nom);
             setEditAlias1(classe.alias1 ?? "");
             setEditAlias2(classe.alias2 ?? "");
-            setEditG1Nom(classe.groupe1Nom ?? "");
-            setEditG2Nom(classe.groupe2Nom ?? "");
+            setEditG1Nom(classe.groupe1_nom ?? "");
+            setEditG2Nom(classe.groupe2_nom ?? "");
             setEditingClasse(true);
           }}
           aria-label="Modifier"
@@ -211,8 +218,8 @@ function ClassePage() {
       <div className="mb-4 grid grid-cols-3 gap-2 p-1 bg-muted rounded-2xl">
         {([
           ["all", `Classe entière (${eleves.length})`],
-          [1, `${classe.groupe1Nom?.trim() || "Groupe 1"} (${countG1})`],
-          [2, `${classe.groupe2Nom?.trim() || "Groupe 2"} (${countG2})`],
+          [1, `${classe.groupe1_nom?.trim() || "Groupe 1"} (${countG1})`],
+          [2, `${classe.groupe2_nom?.trim() || "Groupe 2"} (${countG2})`],
         ] as const).map(([val, label]) => (
           <button
             key={String(val)}
@@ -241,8 +248,8 @@ function ClassePage() {
               {groupeFilter === "all"
                 ? "Classe entière"
                 : groupeFilter === 1
-                  ? classe.groupe1Nom?.trim() || "Groupe 1"
-                  : classe.groupe2Nom?.trim() || "Groupe 2"}
+                  ? classe.groupe1_nom?.trim() || "Groupe 1"
+                  : classe.groupe2nom?.trim() || "Groupe 2"}
             </span>
           </Link>
         </Button>
@@ -344,12 +351,12 @@ function ClassePage() {
               downloadCSV(
                 `eleves-${classe.nom}.csv`,
                 sortedEleves.map((e) => {
-                  const a = aeshs.find((x) => x.id === e.aeshId);
+                  const a = aeshs.find((x) => x.id === e.aesh_id);
                   return {
                     classe: classe.nom,
                     nom: e.nom,
                     prenom: e.prenom,
-                    qr: e.qrCode,
+                    qr: e.qr_code,
                     aesh: a ? `${a.prenom} ${a.nom}` : "",
                     absences: countAbsences(e.id, appels),
                   };
@@ -392,17 +399,22 @@ function ClassePage() {
                       toast.error("Nom et prénom requis");
                       return;
                     }
-                    await createEleve({
-                      classe_id: classeId,
-                      nom,
-                      prenom,
-                    });
+                    try {
+                      await createEleve({
+                        classe_id: classeId,
+                        nom: nom.trim(),
+                        prenom: prenom.trim(),
+                      });
 
-                    await chargerElevesDepuisServeur();
-                    setNom("");
-                    setPrenom("");
-                    setOpen(false);
-                    toast.success("Élève ajouté");
+                      await rechargerEleves();
+                      setNom("");
+                      setPrenom("");
+                      setOpen(false);
+                      toast.success("Élève ajouté");
+                    } catch (error) {
+                      console.error(error);
+                      toast.error("Erreur lors de l’ajout de l’élève");
+                    }
                   }}
                 >
                   Ajouter
@@ -454,12 +466,23 @@ function ClassePage() {
                       variant="ghost"
                       className="size-10"
                       aria-label="Changer de groupe"
-                      onClick={(ev) => {
+                      onClick={async (ev) => {
                         ev.preventDefault();
                         ev.stopPropagation();
-                        const next: 1 | 2 | undefined = e.groupe === 1 ? 2 : e.groupe === 2 ? undefined : 1;
-                        updateEleve(e.id, { groupe: next });
-                        toast.success(next ? `→ Groupe ${next}` : "Retiré des groupes");
+
+                        const next: 1 | 2 | undefined =
+                          e.groupe === 1 ? 2 : e.groupe === 2 ? undefined : 1;
+
+                        try {
+                          await updateEleveServeur(e.id, {
+                            groupe: next ?? null,
+                          });
+                          await rechargerEleves();
+                          toast.success(next ? `→ Groupe ${next}` : "Retiré des groupes");
+                        } catch (error) {
+                          console.error(error);
+                          toast.error("Erreur lors du changement de groupe");
+                        }
                       }}
                     >
                       <Users className="size-5" />
@@ -491,7 +514,7 @@ function ClassePage() {
                         if (confirm(`Supprimer ${e.prenom} ${e.nom} ?`)) {
                           try {
                             await deleteEleveServeur(e.id);
-                            await chargerElevesDepuisServeur();
+                            await rechargerEleves();
                             toast.success("Élève supprimé");
                           } catch (error) {
                             console.error(error);
@@ -519,7 +542,7 @@ function ClassePage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {e.aeshId && (
+                  {e.aesh_id && (
                     <span className="text-xs text-accent-foreground bg-accent/40 px-2 py-0.5 rounded-full">
                       AESH
                     </span>
@@ -544,7 +567,10 @@ function ClassePage() {
             if (confirm(`Supprimer la classe ${classe.nom} et tous ses élèves ?`)) {
               try {
                 await deleteClasseServeur(classe.id);
-                await chargerClassesDepuisServeur();
+                await Promise.all([
+                  rechargerClasses(),
+                  rechargerEleves(),
+                ]);
                 navigate({ to: "/" });
               } catch (e) {
                 console.error(e);
@@ -555,7 +581,7 @@ function ClassePage() {
         >
           <Trash2 className="size-4" /> Supprimer la classe
         </Button>
-      </div>S
+      </div>
 
       <Dialog open={editingClasse} onOpenChange={setEditingClasse}>
         <DialogContent>
@@ -619,15 +645,23 @@ function ClassePage() {
                   toast.error("Le nom est requis");
                   return;
                 }
-                updateClasse(classe.id, {
-                  nom: editNom.trim(),
-                  alias1: editAlias1.trim() || undefined,
-                  alias2: editAlias2.trim() || undefined,
-                  groupe1Nom: editG1Nom.trim() || undefined,
-                  groupe2Nom: editG2Nom.trim() || undefined,
-                });
-                setEditingClasse(false);
-                toast.success("Classe mise à jour");
+                try {
+                  await updateClasseServeur(classe.id, {
+                    nom: editNom.trim(),
+                    alias1: editAlias1.trim() || null,
+                    alias2: editAlias2.trim() || null,
+                    groupe1_nom: editG1Nom.trim() || null,
+                    groupe2_nom: editG2Nom.trim() || null,
+                  });
+
+                  await rechargerClasses();
+
+                  setEditingClasse(false);
+                  toast.success("Classe mise à jour");
+                } catch (error) {
+                  console.error(error);
+                  toast.error("Erreur lors de la mise à jour de la classe");
+                }
               }}
             >
               Enregistrer
@@ -666,12 +700,18 @@ function ClassePage() {
                   toast.error("Nom et prénom requis");
                   return;
                 }
-                updateEleve(editEleveId, {
-                  nom: eNom.trim(),
-                  prenom: ePrenom.trim(),
-                });
-                setEditEleveId(null);
-                toast.success("Élève mis à jour");
+                try {
+                  await updateEleveServeur(editEleveId, {
+                    nom: eNom.trim(),
+                    prenom: ePrenom.trim(),
+                  });
+                  await rechargerEleves();
+                  setEditEleveId(null);
+                  toast.success("Élève mis à jour");
+                } catch (error) {
+                  console.error(error);
+                  toast.error("Erreur lors de la modification de l’élève");
+                }
               }}
             >
               Enregistrer
