@@ -22,7 +22,11 @@ import {
 
 
 import { useStore, type PlanScope, type SeatTable, type TableOrientation, type TableRotation, TABLE_H_W, TABLE_H_H, TABLE_V_W, TABLE_V_H } from "@/lib/store";
-import { getPlan } from "@/services/api/plans";
+import {
+  getPlan,
+  upsertPlan as upsertPlanServer,
+  deletePlan as deletePlanServer,
+} from "@/services/api/plans";
 import { getPlanTemplates, createPlanTemplate, deletePlanTemplate as deletePlanTemplateServer, getDefaultPlan, upsertDefaultPlan } from "@/services/api/planTemplates";
 import { toast } from "sonner";
 import { Trash2, Grid3x3, Users, ScanLine, RotateCw, X, Magnet, Plus, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Move, Save } from "lucide-react";
@@ -120,8 +124,8 @@ function PlanEditorPage() {
   const classes = useStore((s) => s.classes);
   const allEleves = useStore((s) => s.eleves);
   const plans = useStore((s) => s.seatingPlans);
-  const upsertPlan = useStore((s) => s.upsertSeatingPlan);
-  const deletePlan = useStore((s) => s.deleteSeatingPlan);
+  const upsertPlanLocal = useStore((s) => s.upsertSeatingPlan);
+  const deletePlanLocal = useStore((s) => s.deleteSeatingPlan);
   const updateEleve = useStore((s) => s.updateEleve);
 
 
@@ -173,13 +177,11 @@ function PlanEditorPage() {
         const serverPlan = await getPlan(classeId, scope);
         if (!mounted || !serverPlan) return;
 
-        upsertPlan(classeId, scope, {
+        upsertPlanLocal(classeId, scope, {
           tables: Array.isArray(serverPlan.tables)
-            ? serverPlan.tables.map((t) => ({
-                ...t,
-                id: uid(),
-                leftEleveId: undefined,
-                rightEleveId: undefined,
+            ? (serverPlan.tables as SeatTable[]).map((table) => ({
+                ...table,
+                id: table.id || uid(),
               }))
             : [],
           zoom: typeof serverPlan.zoom === "number" ? serverPlan.zoom : Number(serverPlan.zoom) || 1,
@@ -195,7 +197,41 @@ function PlanEditorPage() {
     return () => {
       mounted = false;
     };
-  }, [hydrated, classeId, scope, serverPlanLoaded, upsertPlan]);
+  }, [hydrated, classeId, scope, serverPlanLoaded, upsertPlanLocal]);
+
+  // Recharge le bon plan lors d'un changement de classe ou de groupe.
+  useEffect(() => {
+    setServerPlanLoaded(false);
+  }, [classeId, scope]);
+
+  // Sauvegarde automatique dans PostgreSQL.
+  // Le délai évite une requête à chaque pixel pendant le déplacement d'une table.
+  useEffect(() => {
+    if (!hydrated || !serverPlanLoaded || !plan) return;
+
+    const timer = window.setTimeout(() => {
+      void upsertPlanServer({
+        classe_id: classeId,
+        scope,
+        tables: plan.tables,
+        zoom: plan.zoom ?? 1,
+        background_image: plan.backgroundImage ?? null,
+      }).catch((error) => {
+        console.error("Erreur sauvegarde automatique du plan", error);
+        toast.error("Le plan n'a pas pu être sauvegardé sur le serveur.");
+      });
+    }, 700);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    hydrated,
+    serverPlanLoaded,
+    classeId,
+    scope,
+    plan?.tables,
+    plan?.zoom,
+    plan?.backgroundImage,
+  ]);
 
   useEffect(() => {
     const finish = () => {
@@ -245,7 +281,7 @@ function PlanEditorPage() {
       }
       const cur = useStore.getState().seatingPlans.find((p) => p.classeId === classeId && p.scope === scope);
       if (!cur) return;
-      upsertPlan(classeId, scope, {
+      upsertPlanLocal(classeId, scope, {
         tables: cur.tables.map((t) => (t.id === d.id ? { ...t, x, y } : t)),
       });
     };
@@ -260,7 +296,7 @@ function PlanEditorPage() {
       window.removeEventListener("pointerup", onUp);
       window.removeEventListener("pointercancel", onUp);
     };
-  }, [classeId, scope, upsertPlan, snap, plan?.zoom]);
+  }, [classeId, scope, upsertPlanLocal, snap, plan?.zoom]);
 
   const getDefaultTables = (): SeatTable[] => {
     if (defaultPlanTables.length > 0) {
@@ -296,9 +332,9 @@ function PlanEditorPage() {
   useEffect(() => {
     if (!hydrated || !defaultPlanLoaded) return;
     if (!plan) {
-      upsertPlan(classeId, scope, { tables: getDefaultTables() });
+      upsertPlanLocal(classeId, scope, { tables: getDefaultTables() });
     }
-  }, [hydrated, defaultPlanLoaded, plan, classeId, scope, upsertPlan, defaultPlanTables]);
+  }, [hydrated, defaultPlanLoaded, plan, classeId, scope, upsertPlanLocal, defaultPlanTables]);
 
   useEffect(() => {
     let mounted = true;
@@ -333,7 +369,7 @@ function PlanEditorPage() {
   }, []);
 
   const resetToDefault = () => {
-    upsertPlan(classeId, scope, { tables: getDefaultTables() });
+    upsertPlanLocal(classeId, scope, { tables: getDefaultTables() });
     toast.success("Disposition de 4C appliquée");
   };
 
@@ -373,7 +409,7 @@ function PlanEditorPage() {
   };
 
   const loadTemplate = (template: PlanTemplate) => {
-    upsertPlan(classeId, scope, {
+    upsertPlanLocal(classeId, scope, {
       tables: template.tables.map((t) => ({
         ...t,
         id: uid(),
@@ -427,7 +463,7 @@ function PlanEditorPage() {
   }
 
   const toggleOrientation = (id: string) => {
-    upsertPlan(classeId, scope, {
+    upsertPlanLocal(classeId, scope, {
       tables: tables.map((t) =>
         t.id === id
           ? { ...t, orientation: (t.orientation ?? "h") === "h" ? "v" : "h" }
@@ -437,11 +473,11 @@ function PlanEditorPage() {
   };
 
   const removeTable = (id: string) => {
-    upsertPlan(classeId, scope, { tables: tables.filter((t) => t.id !== id) });
+    upsertPlanLocal(classeId, scope, { tables: tables.filter((t) => t.id !== id) });
   };
 
   const updateTable = (id: string, patch: Partial<SeatTable>) => {
-    upsertPlan(classeId, scope, {
+    upsertPlanLocal(classeId, scope, {
       tables: tables.map((t) => (t.id === id ? { ...t, ...patch } : t)),
     });
   };
@@ -468,12 +504,12 @@ function PlanEditorPage() {
       x: ((i % cols) + 1) * cellW,
       y: (Math.floor(i / cols) + 1) * cellH,
     }));
-    upsertPlan(classeId, scope, { tables: next });
+    upsertPlanLocal(classeId, scope, { tables: next });
     toast.success("Tables alignées");
   };
 
   const setZoom = (zoom: number) => {
-    upsertPlan(classeId, scope, { zoom });
+    upsertPlanLocal(classeId, scope, { zoom });
   };
 
   const assignedElsewhere = (eleveId: string, tableId: string) =>
@@ -519,7 +555,7 @@ function PlanEditorPage() {
           size="sm"
           className="h-10 rounded-xl"
           onClick={() => {
-            upsertPlan(classeId, scope, {
+            upsertPlanLocal(classeId, scope, {
               tables: [...tables, { id: uid(), x: 50, y: 50, orientation: "h" }],
             });
             toast.success("Table horizontale ajoutée");
@@ -531,7 +567,7 @@ function PlanEditorPage() {
           size="sm"
           className="h-10 rounded-xl"
           onClick={() => {
-            upsertPlan(classeId, scope, {
+            upsertPlanLocal(classeId, scope, {
               tables: [...tables, { id: uid(), x: 50, y: 50, orientation: "v" }],
             });
             toast.success("Table verticale ajoutée");
@@ -595,7 +631,7 @@ function PlanEditorPage() {
               toast.error("Aucune place libre.");
               return;
             }
-            upsertPlan(classeId, scope, { tables: next });
+            upsertPlanLocal(classeId, scope, { tables: next });
             toast.success(
               `${filled} élève(s) placé(s)${queue.length ? ` — ${queue.length} sans place` : ""}`,
             );
@@ -1074,7 +1110,7 @@ function PlanEditorPage() {
             className="w-full"
             onClick={() => {
               if (confirm("Vider toutes les tables du plan ?")) {
-                upsertPlan(classeId, scope, { tables: [] });
+                upsertPlanLocal(classeId, scope, { tables: [] });
                 toast.success("Plan vidé");
               }
             }}
@@ -1128,8 +1164,14 @@ function PlanEditorPage() {
             className="w-full text-destructive"
             onClick={() => {
               if (confirm("Supprimer définitivement ce plan ? La disposition par défaut sera recréée à la prochaine ouverture.")) {
-                deletePlan(classeId, scope);
-                toast.success("Plan supprimé");
+                try {
+                  await deletePlanServer(classeId, scope);
+                  deletePlanLocal(classeId, scope);
+                  toast.success("Plan supprimé du serveur");
+                } catch (error) {
+                  console.error("Erreur suppression du plan serveur", error);
+                  toast.error("Impossible de supprimer le plan du serveur.");
+                }
               }
             }}
           >
